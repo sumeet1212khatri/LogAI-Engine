@@ -1,0 +1,15 @@
+gradio==4.44.0
+sentence-transformers==3.0.1
+scikit-learn==1.5.1
+huggingface-hub==0.24.6
+joblib==1.4.2
+pandas==2.2.2
+numpy==1.26.4
+
+# ONNX Runtime — Speed ke liye JARURI hai
+onnxruntime==1.19.2
+optimum[onnxruntime]==1.21.2
+
+# Transformers for ONNX tokenizer
+transformers==4.44.2
+tokenizers>=0.19.0
