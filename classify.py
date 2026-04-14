@@ -1,20 +1,19 @@
 """
-classify.py — 3-Tier Hybrid Pipeline (V3 — Latency-Tracked)
-
+classify.py — 3-Tier Hybrid Pipeline (V3 — Latency-Tracked & Parallelized)
 Architecture:
   LegacyCRM → LLM directly
   Others    → Regex → BERT (batch) → LLM fallback
-
 Changes in V3:
   - Tier-wise latency tracking (regex_ms, bert_ms, llm_ms)
   - Pipeline summary with p50/p95 per tier
-  - Defensive: LLM timeout + retry baked in via processor_llm
-  - classify_logs returns richer result dict
+  - Defensive: LLM timeout + circuit breaker baked in via processor_llm
+  - Parallelized LLM Tier using ThreadPoolExecutor for high throughput
 """
 from __future__ import annotations
 import time
 import statistics
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
 from processor_regex import classify_with_regex
 from processor_bert  import classify_batch as bert_batch
 from processor_llm   import classify_with_llm
@@ -34,7 +33,7 @@ def _make_result(label: str, tier: str, confidence, latency_ms: float) -> dict:
 
 # ── Single log (backward-compatible) ────────────────────────────────────────
 def classify_log(source: str, log_msg: str) -> dict:
-    """Single log classify karo. Returns label, tier, confidence, latency_ms."""
+    """Classify a single log. Returns label, tier, confidence, and latency_ms."""
     results = classify_logs([(source, log_msg)])
     return results[0]
 
@@ -43,10 +42,8 @@ def classify_log(source: str, log_msg: str) -> dict:
 def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
     """
     Batch classify with 3-tier routing + per-result latency.
-
     Returns list of dicts:
       { label, tier, confidence, latency_ms }
-
     Tier routing:
       LegacyCRM source → LLM directly
       Regex match      → done (sub-ms)
@@ -58,19 +55,17 @@ def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
     # ── Step 1: Route to groups ─────────────────────────────────────────────
     llm_indices   = []
     bert_indices  = []
-    entry_times   = [time.perf_counter()] * n  # approximate per-log start
 
-    t_route_start = time.perf_counter()
     for i, (source, log_msg) in enumerate(logs):
-        entry_times[i] = time.perf_counter()
         if source == LEGACY_SOURCE:
             llm_indices.append(i)
         else:
-            t0    = time.perf_counter()
+            t_start = time.perf_counter()
             label = classify_with_regex(log_msg)
-            t1    = time.perf_counter()
+            
             if label:
-                results[i] = _make_result(label, "Regex", 1.0, (t1 - t0) * 1000)
+                latency_ms = (time.perf_counter() - t_start) * 1000
+                results[i] = _make_result(label, "Regex", 1.0, latency_ms)
             else:
                 bert_indices.append(i)
 
@@ -90,14 +85,22 @@ def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
             else:
                 llm_indices.append(idx)
 
-    # ── Step 3: LLM (LegacyCRM + BERT fallback) ────────────────────────────
-    for i in llm_indices:
-        _, log_msg = logs[i]
-        t0    = time.perf_counter()
-        label = classify_with_llm(log_msg)
-        t1    = time.perf_counter()
-        tier  = "LLM" if logs[i][0] == LEGACY_SOURCE else "LLM (fallback)"
-        results[i] = _make_result(label, tier, None, (t1 - t0) * 1000)
+    # ── Step 3: LLM (Parallel Concurrency) ──────────────────────────────────
+    if llm_indices:
+        def parallel_llm(idx):
+            src, msg = logs[idx]
+            t_llm_0 = time.perf_counter()
+            label = classify_with_llm(msg)
+            t_llm_ms = (time.perf_counter() - t_llm_0) * 1000
+            tier = "LLM" if src == LEGACY_SOURCE else "LLM (fallback)"
+            return idx, _make_result(label, tier, None, t_llm_ms)
+
+        # Parallelize API calls to prevent pipeline stall, restricted to 4 workers to prevent OOM
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            llm_results = list(executor.map(parallel_llm, llm_indices))
+
+        for idx, res in llm_results:
+            results[idx] = res
 
     return results
 
@@ -140,14 +143,14 @@ def pipeline_summary(results: list[dict]) -> dict:
 # ── CSV batch classify ───────────────────────────────────────────────────────
 def classify_csv(input_path: str, output_path: str = "output.csv") -> tuple[str, pd.DataFrame]:
     """
-    CSV file classify karo.
+    Process a batch of logs from a CSV file.
     Required columns: 'source', 'log_message'
-    Output: adds 'predicted_label', 'tier_used', 'confidence', 'latency_ms'
+    Output: appends 'predicted_label', 'tier_used', 'confidence', 'latency_ms'
     """
     df = pd.read_csv(input_path)
     required = {"source", "log_message"}
     if not required.issubset(df.columns):
-        raise ValueError(f"CSV mein ye columns chahiye: {required}. Mila: {set(df.columns)}")
+        raise ValueError(f"Missing required columns in CSV. Expected: {required}. Found: {set(df.columns)}")
 
     log_pairs = list(zip(df["source"], df["log_message"]))
     results   = classify_logs(log_pairs)
