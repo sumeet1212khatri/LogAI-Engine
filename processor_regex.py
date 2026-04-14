@@ -1,9 +1,7 @@
 """
 processor_regex.py — Tier 1: Rule-based Classifier
-
 Target coverage: 40%+ (up from 15%)
 Latency: sub-millisecond per log
-
 New pattern groups added:
   - HTTP request/response logs   (was completely missing!)
   - Auth / credential events     (login failures, MFA, lockouts)
@@ -218,3 +216,4 @@ if __name__ == "__main__":
     # Latency benchmark
     lat = benchmark_regex(all_logs * 100)
     print(f"\nLatency (p50/p95/p99): {lat['p50_ms']}ms / {lat['p95_ms']}ms / {lat['p99_ms']}ms")
+
