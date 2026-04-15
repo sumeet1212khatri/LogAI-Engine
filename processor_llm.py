@@ -1,7 +1,8 @@
-
+"""
+processor_llm.py — Tier 3: LLM-based Classifier
+"""
 from __future__ import annotations
 import os
-import re
 import time
 import logging
 
@@ -17,8 +18,8 @@ VALID_CATEGORIES = ["Workflow Error", "Deprecation Warning"]
 
 # Retry / timeout config
 MAX_RETRIES     = 2
-RETRY_DELAY_SEC = 1.0   # doubles on each retry (exponential backoff)
-REQUEST_TIMEOUT = 5     # seconds — fail fast, do not hang pipeline
+RETRY_DELAY_SEC = 1.0   
+REQUEST_TIMEOUT = 5     
 
 SYSTEM_PROMPT = (
     "You are an enterprise log classifier. "
@@ -57,16 +58,13 @@ def _build_messages(log_msg: str) -> list[dict]:
         {"role": "user",   "content": user_content},
     ]
 
-
 # ── Normalize raw LLM output ─────────────────────────────────────────────────
 def _normalize(raw: str) -> str:
-    """Map raw LLM output to a valid category or 'Unclassified'."""
     raw = raw.strip().strip('"').strip("'")
     for cat in VALID_CATEGORIES:
         if cat.lower() in raw.lower():
             return cat
     return "Unclassified"
-
 
 # ── Main classify function ────────────────────────────────────────────────────
 def classify_with_llm(log_msg: str) -> str:
@@ -76,7 +74,6 @@ def classify_with_llm(log_msg: str) -> str:
       - Retry with exponential backoff (MAX_RETRIES attempts)
       - Explicit fallback to "Unclassified" on all error paths
     """
-    # ── Inference with retry ─────────────────────────────────────────────────
     if not HF_TOKEN:
         logger.warning("[LLM] HF_TOKEN not set — returning Unclassified")
         return "Unclassified"
@@ -85,9 +82,8 @@ def classify_with_llm(log_msg: str) -> str:
 
     client  = InferenceClient(token=HF_TOKEN, timeout=REQUEST_TIMEOUT)
     delay   = RETRY_DELAY_SEC
-    last_err: Optional[Exception] = None
 
-    for attempt in range(1, MAX_RETRIES + 2):  # +2: initial + MAX_RETRIES
+    for attempt in range(1, MAX_RETRIES + 2): 
         try:
             response = client.chat.completions.create(
                 model=LLM_MODEL,
@@ -102,38 +98,19 @@ def classify_with_llm(log_msg: str) -> str:
             return label
 
         except Exception as e:
-            # 🚨 JUGAD: Agar credits khatam hain (402), toh turant fallback do
-            # Isse UI hang nahi hoga aur retry ka wait nahi karna padega
+            # FIXED: Return standard "Unclassified" so we don't pollute the CSV
             if "402" in str(e) or "credits" in str(e).lower():
-                logger.error(f"[LLM] Credits Finished (402). Returning Fallback Label.")
-                return "Escalated: Manual Review Required (API Limit)"
+                logger.error(f"[LLM] Credits Finished (402). Returning Unclassified.")
+                return "Unclassified"
             
-            last_err = e
             if attempt <= MAX_RETRIES:
                 logger.warning(f"[LLM] Attempt {attempt} failed ({e}), retrying in {delay:.1f}s…")
                 time.sleep(delay)
-                delay *= 2  # exponential backoff
+                delay *= 2  
             else:
                 logger.error(f"[LLM] All attempts failed. Last error: {e}")
 
     return "Unclassified"
 
-
-# ── Batch classify (serial — LLM is already rate-limited) ────────────────────
 def classify_batch_llm(log_msgs: list[str]) -> list[str]:
-    """Classify multiple logs through LLM. Each call is sequential to respect rate limits."""
     return [classify_with_llm(msg) for msg in log_msgs]
-
-
-# ── CLI test ─────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-    test_logs = [
-        "Case escalation for ticket ID 7324 failed because the assigned support agent is no longer active.",
-        "The 'ReportGenerator' module will be retired in version 4.0. Migrate to 'AdvancedAnalyticsSuite'.",
-        "System reboot initiated by user 12345.",   # should be Unclassified
-    ]
-    for log in test_logs:
-        result = classify_with_llm(log)
-        print(f"{result:25s} | {log[:80]}")
