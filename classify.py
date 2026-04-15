@@ -24,25 +24,21 @@ def _make_result(label: str, tier: str, confidence, latency_ms: float) -> dict:
     }
 
 
-# ── Caching Layer (V5 UPDATE: Max RAM Eater) ────────────────────────────────
-@lru_cache(maxsize=500000) # Increased to 500k to absorb duplicate logs in 2M+ datasets
+# ── Caching Layer (Max RAM Eater) ───────────────────────────────────────────
+@lru_cache(maxsize=500000) 
 def cached_llm_call(log_msg: str) -> str:
-    """Only executes the expensive LLM call if the string misses the cache."""
+    """Executes the expensive LLM call only if the string misses the cache."""
     return classify_with_llm(log_msg)
 
 
 # ── Single log (backward-compatible) ────────────────────────────────────────
 def classify_log(source: str, log_msg: str) -> dict:
-    """Classify a single log. Returns label, tier, confidence, and latency_ms."""
     results = classify_logs([(source, log_msg)])
     return results[0]
 
 
 # ── Batch pipeline (main entry point) ───────────────────────────────────────
 def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
-    """
-    Batch classify with 3-tier routing + per-result latency.
-    """
     n       = len(logs)
     results = [None] * n
 
@@ -63,7 +59,7 @@ def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
             else:
                 bert_indices.append(i)
 
-    # ── Step 2: BERT batch ──────────────────────────────────────────────────
+    # ── Step 2: BERT batch (CPU Bound - No Threads Allowed Here) ────────────
     if bert_indices:
         bert_msgs = [logs[i][1] for i in bert_indices]
 
@@ -79,13 +75,12 @@ def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
             else:
                 llm_indices.append(idx)
 
-    # ── Step 3: LLM (Parallel Concurrency & Caching) ────────────────────────
+    # ── Step 3: LLM (I/O Bound - Threading Applied Here) ────────────────────
     if llm_indices:
         def parallel_llm(idx):
             src, msg = logs[idx]
             
             t_llm_0 = time.perf_counter()
-            # Removed redundant MD5 hashing; standard string key is safer and faster
             label = cached_llm_call(msg)
             t_llm_ms = (time.perf_counter() - t_llm_0) * 1000
             
@@ -94,7 +89,6 @@ def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
             
             return idx, _make_result(label, tier, None, t_llm_ms)
 
-        # Removed hardcoded max_workers=4 to allow auto-scaling based on CPU cores
         with ThreadPoolExecutor() as executor:
             llm_results = list(executor.map(parallel_llm, llm_indices))
 
@@ -106,10 +100,6 @@ def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
 
 # ── Pipeline summary ─────────────────────────────────────────────────────────
 def pipeline_summary(results: list[dict]) -> dict:
-    """
-    Aggregate stats from classify_logs output.
-    Useful for dashboard and benchmark reporting.
-    """
     tier_groups: dict[str, list[float]] = {}
     label_counts: dict[str, int] = {}
 
@@ -140,17 +130,12 @@ def pipeline_summary(results: list[dict]) -> dict:
     }
 
 
-# ── Multiprocessing Helper ───────────────────────────────────────────────────
-def _process_chunk(chunk: list[tuple[str, str]]) -> list[dict]:
-    """Top-level helper function required for ThreadPoolExecutor mapping."""
-    return classify_logs(chunk)
-
-
-# ── CSV batch classify (V5 UPDATE: Multi-Core Processor) ─────────────────────
+# ── CSV batch classify (Hybrid Processing) ───────────────────────────────────
 def classify_csv(input_path: str, output_path: str = "output.csv") -> tuple[str, pd.DataFrame]:
     """
     Ultra-Optimized Batch Processing for 2M+ Logs.
-    Uses ThreadPoolExecutor to share the massive lru_cache across chunks.
+    Outer chunks run sequentially (bypasses GIL for BERT, preserves main memory cache).
+    Inner LLM calls thread automatically inside classify_logs.
     """
     df = pd.read_csv(input_path)
     required = {"source", "log_message"}
@@ -160,22 +145,18 @@ def classify_csv(input_path: str, output_path: str = "output.csv") -> tuple[str,
     log_pairs = list(zip(df["source"], df["log_message"]))
     total_logs = len(log_pairs)
     
-    # OS ke liye 1 core chhod kar baaki sab use karo
-    max_cores = max(1, os.cpu_count() - 1)
-    
-    # 50,000 logs ke chunks banao (Memory distribution)
+    # Chunk size controls how much data is in RAM at once
     chunk_size = 50000 
     chunks = [log_pairs[i:i + chunk_size] for i in range(0, total_logs, chunk_size)]
     
     results = []
     
-    # Switched to ThreadPoolExecutor so memory (lru_cache) is shared properly
-    print(f"🔥 Firing up {max_cores} worker threads to process {len(chunks)} chunks...")
+    print(f"🔥 Processing {len(chunks)} chunks... (BERT handles CPU batching, LLM handles I/O threads)")
     
     t_start = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=max_cores) as executor:
-        for chunk_result in executor.map(_process_chunk, chunks):
-            results.extend(chunk_result)
+    # Process sequentially to avoid GIL locks on BERT and keep the cache in one memory block
+    for chunk in chunks:
+        results.extend(classify_logs(chunk))
     t_end = time.perf_counter()
     
     print(f"⏱️ True Wall-Clock Processing Time: {(t_end - t_start):.2f} seconds")
@@ -201,30 +182,9 @@ if __name__ == "__main__":
     sample = [
         ("ModernCRM",       "IP 192.168.133.114 blocked due to potential attack"),
         ("BillingSystem",   "User User12345 logged in."),
-        ("AnalyticsEngine", "File data_6957.csv uploaded successfully by user User265."),
-        ("ModernHR",        "GET /v2/servers/detail HTTP/1.1 status: 200 len: 1583 time: 0.19"),
-        ("ModernHR",        "Admin access escalation detected for user 9429"),
-        ("LegacyCRM",       "Case escalation for ticket ID 7324 failed because the assigned support agent is no longer active."),
-        ("LegacyCRM",       "Case escalation for ticket ID 7324 failed because the assigned support agent is no longer active."), 
+        ("LegacyCRM",       "Case escalation failed due to active timeout."),
     ]
 
-    print(f'{"Source":<20} {"Tier":<22} {"Conf":>6} {"Lat(ms)":>8}  {"Label":<25} Log')
-    print("─" * 115)
+    print("Running quick test...")
     results = classify_logs(sample)
-    for (source, log), r in zip(sample, results):
-        conf = f"{r['confidence']:.0%}" if r["confidence"] else "  N/A"
-        print(f'{source:<20} {r["tier"]:<22} {conf:>6} {r["latency_ms"]:>8.4f}  {r["label"]:<25} {log[:40]}')
-
-    summary = pipeline_summary(results)
-    print("\n📊 Pipeline Summary:")
-    
-    for tier, stats in summary["tier_stats"].items():
-        if "Regex" in tier:
-             print(f"  Regex Latency: < 0.1 ms (Recorded p50: {stats['p50_ms']} ms) | count={stats['count']}")
-        else:
-            print(f"  {tier}: {stats['count']} logs ({stats['pct']}%) | "
-                  f"p50={stats['p50_ms']}ms p95={stats['p95_ms']}ms p99={stats['p99_ms']}ms")
-
-    print("\n🏷️  Label distribution:")
-    for label, count in sorted(summary["label_counts"].items(), key=lambda x: -x[1]):
-        print(f"  • {label}: {count}")
+    print("Done. No errors.")
