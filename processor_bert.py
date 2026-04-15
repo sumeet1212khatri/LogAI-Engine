@@ -1,6 +1,7 @@
 """
 processor_bert_fast.py — ONNX Runtime powered BERT classifier
 Speed: 82 logs/s → 3200+ logs/s
+
 How it works:
 1. ONNX Runtime: 3-5x faster than standard PyTorch
 2. Batch processing: 64 logs processed concurrently
@@ -24,7 +25,7 @@ _load_lock        = threading.Lock()
 MODEL_PATH    = os.path.join(os.path.dirname(__file__), 'models', 'log_classifier.joblib')
 ONNX_DIR      = os.path.join(os.path.dirname(__file__), 'models', 'onnx')
 CONFIDENCE_THRESHOLD = 0.30
-DEFAULT_BATCH = 64
+DEFAULT_BATCH = 512
 
 
 def preload_models():
