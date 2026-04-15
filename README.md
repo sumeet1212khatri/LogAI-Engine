@@ -1,9 +1,7 @@
 # LogAI-Engine
 
 
-
-<img width="1918" height="940" alt="image" src="https://github.com/user-attachments/assets/00c8d59b-b312-4f0f-b7b1-dce3e4eb4ff0" />
-
+<img width="1919" height="943" alt="image" src="https://github.com/user-attachments/assets/ccef8a14-00fc-40c7-a677-4201ff2f1b51" />
 
 
 <div align="center">
