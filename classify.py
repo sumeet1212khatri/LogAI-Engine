@@ -1,11 +1,22 @@
+"""
+classify.py — 3-Tier Hybrid Pipeline (V9 — Balanced CPU & Gradio Safe)
 
+Architecture:
+  LegacyCRM → LLM directly
+  Others    → Regex → BERT (batch) → LLM fallback
+
+Changes in V9:
+  - Fixed CPU Starvation: Limited max_workers to half the CPU cores to prevent Gradio WebSocket timeouts.
+  - Reduced IPC Overhead: Lowered chunk_size to 10,000 to prevent CPU lockups during cross-process data pickling.
+  - Restored Multi-processing: Outer chunks use ProcessPoolExecutor for speed, inner LLM calls use ThreadPoolExecutor.
+"""
 from __future__ import annotations
 import os
 import time
 import statistics
 import pandas as pd
 from functools import lru_cache
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from processor_regex import classify_with_regex
 from processor_bert  import classify_batch as bert_batch
 from processor_llm   import classify_with_llm
@@ -24,7 +35,7 @@ def _make_result(label: str, tier: str, confidence, latency_ms: float) -> dict:
     }
 
 
-# ── Caching Layer (Max RAM Eater) ───────────────────────────────────────────
+# ── Caching Layer (Sharded per Worker) ──────────────────────────────────────
 @lru_cache(maxsize=500000) 
 def cached_llm_call(log_msg: str) -> str:
     """Executes the expensive LLM call only if the string misses the cache."""
@@ -59,7 +70,7 @@ def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
             else:
                 bert_indices.append(i)
 
-    # ── Step 2: BERT batch (CPU Bound - No Threads Allowed Here) ────────────
+    # ── Step 2: BERT batch (CPU Bound) ──────────────────────────────────────
     if bert_indices:
         bert_msgs = [logs[i][1] for i in bert_indices]
 
@@ -130,12 +141,16 @@ def pipeline_summary(results: list[dict]) -> dict:
     }
 
 
-# ── CSV batch classify (Hybrid Processing) ───────────────────────────────────
+# ── Multiprocessing Helper ───────────────────────────────────────────────────
+def _process_chunk(chunk: list[tuple[str, str]]) -> list[dict]:
+    """Top-level helper function required for ProcessPoolExecutor mapping."""
+    return classify_logs(chunk)
+
+
+# ── CSV batch classify (Balanced Processing) ─────────────────────────────────
 def classify_csv(input_path: str, output_path: str = "output.csv") -> tuple[str, pd.DataFrame]:
     """
-    Ultra-Optimized Batch Processing for 2M+ Logs.
-    Outer chunks run sequentially (bypasses GIL for BERT, preserves main memory cache).
-    Inner LLM calls thread automatically inside classify_logs.
+    Balanced Batch Processing to prevent CPU Starvation UI crashes.
     """
     df = pd.read_csv(input_path)
     required = {"source", "log_message"}
@@ -145,18 +160,23 @@ def classify_csv(input_path: str, output_path: str = "output.csv") -> tuple[str,
     log_pairs = list(zip(df["source"], df["log_message"]))
     total_logs = len(log_pairs)
     
-    # Chunk size controls how much data is in RAM at once
-    chunk_size = 50000 
+    # FIX: Use exactly half of the available CPU cores (minimum 1). 
+    # This leaves the other half for Gradio websockets and the OS.
+    safe_cores = max(1, os.cpu_count() // 2)
+    
+    # FIX: Reduce chunk size to 10,000. 
+    # Massive chunks cause CPU lockups during inter-process data pickling.
+    chunk_size = 10000 
     chunks = [log_pairs[i:i + chunk_size] for i in range(0, total_logs, chunk_size)]
     
     results = []
     
-    print(f"🔥 Processing {len(chunks)} chunks... (BERT handles CPU batching, LLM handles I/O threads)")
+    print(f"🔥 Firing up {safe_cores} CPU Cores (Leaving remaining for UI)...")
     
     t_start = time.perf_counter()
-    # Process sequentially to avoid GIL locks on BERT and keep the cache in one memory block
-    for chunk in chunks:
-        results.extend(classify_logs(chunk))
+    with ProcessPoolExecutor(max_workers=safe_cores) as executor:
+        for chunk_result in executor.map(_process_chunk, chunks):
+            results.extend(chunk_result)
     t_end = time.perf_counter()
     
     print(f"⏱️ True Wall-Clock Processing Time: {(t_end - t_start):.2f} seconds")
@@ -175,16 +195,3 @@ def classify_csv(input_path: str, output_path: str = "output.csv") -> tuple[str,
 
 # Aliases
 classify = classify_logs
-
-
-# ── Self-test ────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    sample = [
-        ("ModernCRM",       "IP 192.168.133.114 blocked due to potential attack"),
-        ("BillingSystem",   "User User12345 logged in."),
-        ("LegacyCRM",       "Case escalation failed due to active timeout."),
-    ]
-
-    print("Running quick test...")
-    results = classify_logs(sample)
-    print("Done. No errors.")
