@@ -21,6 +21,7 @@ _ort_session      = None
 _ort_tokenizer    = None
 _model_ready      = False
 _load_lock        = threading.Lock()
+_pytorch_lock     = threading.Lock()
 
 MODEL_PATH    = os.path.join(os.path.dirname(__file__), 'models', 'log_classifier.joblib')
 ONNX_DIR      = os.path.join(os.path.dirname(__file__), 'models', 'onnx')
@@ -121,14 +122,15 @@ def _embed_onnx(texts: list[str]) -> np.ndarray:
 
 
 def _embed_pytorch(texts: list[str]) -> np.ndarray:
-    """PyTorch fallback for embeddings."""
-    return _embedding_model.encode(
-        texts,
-        batch_size=DEFAULT_BATCH,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-        show_progress_bar=False
-    )
+    """PyTorch fallback for embeddings (Thread-Safe)."""
+    with _pytorch_lock:
+        return _embedding_model.encode(
+            texts,
+            batch_size=DEFAULT_BATCH,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=False
+        )
 
 
 # ── PUBLIC API ──────────────────────────────────────────────
