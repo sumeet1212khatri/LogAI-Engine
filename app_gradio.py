@@ -5,6 +5,7 @@ Ultra-Modern 3D UI | Optimized for Gradio 6.0 & HF Free Tier
 from __future__ import annotations
 import io
 import time
+import uuid
 import pandas as pd
 import numpy as np
 import gradio as gr
@@ -19,11 +20,10 @@ SOURCES = [
     "AnalyticsEngine", "ThirdPartyAPI", "LegacyCRM",
 ]
 
-# Updated to dynamically support the new Cache Hit tiers
 def get_tier_icon(tier_name: str) -> str:
     if "Regex" in tier_name: return "🟢"
     if "BERT" in tier_name: return "🔵"
-    if "Cache Hit" in tier_name: return "⚡" # Make the cost savings pop in the UI
+    if "Cache Hit" in tier_name: return "⚡"
     if "fallback" in tier_name: return "🟠"
     if "LLM" in tier_name: return "🟡"
     return "⚪"
@@ -36,7 +36,7 @@ EXAMPLE_LOGS = [
     ["LegacyCRM",       "The 'BulkEmailSender' feature will be deprecated in v5.0."],
 ]
 
-# ── Custom CSS (Ultra-Modern 3D Theme) ────────────────────────
+# ── Custom CSS ────────────────────────
 CUSTOM_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=Share+Tech+Mono&family=Exo+2:wght@400;600&display=swap');
 
@@ -98,7 +98,7 @@ def classify_single(source: str, log_message: str):
             result["label"], 
             f"{icon} {result['tier']}", 
             f"{result['confidence']:.1%}" if result["confidence"] else "N/A", 
-            f"{latency:.4f} ms" # FIX: Expose the true sub-millisecond telemetry
+            f"{latency:.4f} ms" 
         )
     except Exception as e:
         return f"Error: {str(e)}", "Fail", "—", "—"
@@ -110,8 +110,11 @@ def classify_batch(file, progress=gr.Progress(track_tqdm=True)):
     t0 = time.perf_counter()
     
     try:
-        # File processing
-        output_path, df = classify_csv(file.name, "/tmp/classified_output.csv")
+        # FIX: Generate a unique output path per user to prevent data bleeding
+        unique_id = uuid.uuid4().hex
+        safe_output_path = f"/tmp/classified_output_{unique_id}.csv"
+        
+        output_path, df = classify_csv(file.name, safe_output_path)
         total_time_sec = time.perf_counter() - t0
         
         progress(0.9, desc="📊 Calculating Metrics...")
@@ -120,7 +123,6 @@ def classify_batch(file, progress=gr.Progress(track_tqdm=True)):
         label_counts = df["predicted_label"].value_counts().to_dict()
         tier_counts = df["tier_used"].value_counts().to_dict()
         
-        # FIX: Decouple Latency Metrics per tier instead of global distribution
         tier_lines = []
         for tier, count in tier_counts.items():
             tier_df = df[df["tier_used"] == tier]
@@ -156,7 +158,6 @@ def classify_batch(file, progress=gr.Progress(track_tqdm=True)):
         return None, f"❌ System Error: {str(e)}"
 
 # ── Theme & Layout ──────────────────────────────────────────
-
 THEME = gr.themes.Base(
     primary_hue="blue",
     secondary_hue="cyan",
@@ -168,7 +169,6 @@ with gr.Blocks(title="Log AI Engine") as demo:
     gr.HTML("<div style='text-align: center; padding: 20px;'><h1>🔍 LOG CLASSIFICATION SYSTEM</h1></div>")
 
     with gr.Tabs():
-        # TAB 1: Single Log
         with gr.Tab("⚡ REAL-TIME ANALYZER"):
             with gr.Row():
                 with gr.Column(scale=1):
@@ -187,7 +187,6 @@ with gr.Blocks(title="Log AI Engine") as demo:
             run_btn.click(classify_single, [src_in, msg_in], [lbl_out, tier_out, conf_out, lat_out])
             gr.Examples(examples=EXAMPLE_LOGS, inputs=[src_in, msg_in])
 
-        # TAB 2: Batch CSV
         with gr.Tab("📦 BATCH PROCESSING"):
             with gr.Row():
                 with gr.Column():
@@ -199,7 +198,6 @@ with gr.Blocks(title="Log AI Engine") as demo:
             
             batch_btn.click(classify_batch, inputs=[csv_in], outputs=[csv_out, stats_out])
 
-# ── Optimized Launch ────────────────────────────────────────
 demo.queue(default_concurrency_limit=2).launch(
     server_name="0.0.0.0",
     server_port=7860,
