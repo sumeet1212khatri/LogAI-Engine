@@ -5,7 +5,7 @@
 ![LogAI-Engine Banner](https://github.com/user-attachments/assets/32c9f5f8-40b3-4d52-bed7-c44842b703fb)
 
 **A production-grade, 3-tier hybrid log classification pipeline.**  
-Classifies **2,000,000** enterprise logs in under **9 minutes** with **92% of traffic** handled at sub-millisecond cost.
+Classifies **2,000,000** enterprise logs in under **6 minutes** with **92% of traffic** handled at sub-millisecond cost.
 
 [![HuggingFace Space](https://img.shields.io/badge/🤗%20HuggingFace-Live%20Demo-FFD21E?style=for-the-badge)](https://huggingface.co/spaces/NOT-OMEGA/LogAI-Engine)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
