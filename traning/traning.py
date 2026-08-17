@@ -1,6 +1,4 @@
-# ✨ LOG CLASSIFICATION SYSTEM V2 (FULL CODE & OUTPUT)
 
-### Cell 1: Setup & Installation
 **Code:**
 ```python
 !pip install -q sentence-transformers scikit-learn pandas numpy \
