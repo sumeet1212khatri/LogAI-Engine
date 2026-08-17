@@ -1,6 +1,4 @@
-"""
-processor_llm.py — Tier 3: LLM-based Classifier
-"""
+
 from __future__ import annotations
 import os
 import time
@@ -10,7 +8,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Config ─────────────────────────────────────────────────────────────────
+
 HF_TOKEN   = os.getenv("HF_TOKEN")
 LLM_MODEL  = "mistralai/Mistral-7B-Instruct-v0.3"
 
