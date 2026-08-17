@@ -1,19 +1,11 @@
-"""
-processor_bert_fast.py — ONNX Runtime powered BERT classifier
-Speed: 82 logs/s → 3200+ logs/s
 
-How it works:
-1. ONNX Runtime: 3-5x faster than standard PyTorch
-2. Batch processing: 64 logs processed concurrently
-3. Pre-allocated buffers: Zero memory waste
-"""
 from __future__ import annotations
 import os
 import threading
 import numpy as np
 import joblib
 
-# ── Configuration & State ──────────────────────────────────────────────
+
 _USE_ONNX = False
 _embedding_model = None
 _classifier       = None
@@ -33,14 +25,14 @@ def preload_models():
     """Lazily load models — thread-safe, strict single initialization."""
     global _USE_ONNX, _embedding_model, _classifier, _ort_session, _ort_tokenizer, _model_ready
 
-    # 🚨 GOOGLE-LEVEL FIX: Everything critical must be INSIDE the lock
+    
     with _load_lock:
         if _classifier is not None:
             return  # Already loaded
 
         print("Initializing BERT pipeline...")
         
-        # ── Load Classifier ────────────────────────────────────────────
+       
         if not os.path.exists(MODEL_PATH):
             raise FileNotFoundError(
                 f'Model not found: {MODEL_PATH}\n'
@@ -48,7 +40,7 @@ def preload_models():
             )
         _classifier = joblib.load(MODEL_PATH)
 
-        # ── Try ONNX (Fast Mode), Fallback to PyTorch ──────────────────
+     
         onnx_model_file = os.path.join(ONNX_DIR, 'model.onnx')
 
         if os.path.exists(onnx_model_file):
@@ -56,7 +48,7 @@ def preload_models():
                 import onnxruntime as ort
                 from transformers import AutoTokenizer
 
-                # CPU optimized session options
+              
                 sess_opts = ort.SessionOptions()
                 sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
                 sess_opts.intra_op_num_threads = os.cpu_count() or 1
@@ -83,7 +75,7 @@ def preload_models():
         _model_ready = True
         print('[BERT] ✅ Models ready!')
 
-# Map legacy function name to new one for backward compatibility
+
 _load_models = preload_models
 
 
@@ -94,10 +86,10 @@ def _embed_onnx(texts: list[str]) -> np.ndarray:
         padding=True,
         truncation=True,
         max_length=128,
-        return_tensors='np'  # NumPy directly (faster than PyTorch tensors)
+        return_tensors='np'  
     )
 
-    # ONNX session run
+  
     ort_inputs = {
         'input_ids':      inputs['input_ids'].astype(np.int64),
         'attention_mask': inputs['attention_mask'].astype(np.int64),
@@ -110,13 +102,13 @@ def _embed_onnx(texts: list[str]) -> np.ndarray:
     outputs = _ort_session.run(None, ort_inputs)
     hidden  = outputs[0]  # (batch, seq_len, hidden)
 
-    # Mean pooling (attention mask weighted)
+    
     mask    = inputs['attention_mask'][:, :, None].astype(np.float32)
     summed  = (hidden * mask).sum(axis=1)
     counts  = mask.sum(axis=1)
     embeddings = summed / counts
 
-    # L2 normalize
+  
     norms  = np.linalg.norm(embeddings, axis=1, keepdims=True)
     return  embeddings / (norms + 1e-8)
 
@@ -133,7 +125,7 @@ def _embed_pytorch(texts: list[str]) -> np.ndarray:
         )
 
 
-# ── PUBLIC API ──────────────────────────────────────────────
+
 
 def classify_with_bert(log_message: str) -> tuple[str, float]:
     """
@@ -157,17 +149,17 @@ def classify_batch(log_messages: list[str]) -> list[tuple[str, float]]:
 
     results = []
 
-    # Process in batches
+   
     for i in range(0, len(log_messages), DEFAULT_BATCH):
         batch = log_messages[i:i + DEFAULT_BATCH]
 
-        # Generate embeddings
+      
         if _USE_ONNX:
             embeddings = _embed_onnx(batch)
         else:
             embeddings = _embed_pytorch(batch)
 
-        # Classify
+     
         probs   = _classifier.predict_proba(embeddings)
         max_probs = probs.max(axis=1)
         labels    = _classifier.predict(embeddings)
@@ -193,7 +185,6 @@ def is_onnx_mode() -> bool:
     return _USE_ONNX
 
 
-# ── TEST ────────────────────────────────────────────────────
 if __name__ == '__main__':
     import time
 
@@ -206,7 +197,7 @@ if __name__ == '__main__':
         'Backup completed successfully.',
         'User User123 logged in.',
         'Data replication task for shard 14 did not complete',
-        'Hey bro chill ya!',     # should be Unclassified
+        'Hey bro chill ya!',    
     ]
 
     print('Single log test:')
@@ -216,7 +207,7 @@ if __name__ == '__main__':
 
     print(f'\nMode: {"ONNX 🚀" if is_onnx_mode() else "PyTorch"}')
 
-    # Speed test
+   
     big_batch = test_logs * 100
     t0 = time.perf_counter()
     classify_batch(big_batch)
