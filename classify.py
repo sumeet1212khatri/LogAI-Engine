@@ -1,15 +1,4 @@
-"""
-classify.py — 3-Tier Hybrid Pipeline (V9 — Balanced CPU & Gradio Safe)
 
-Architecture:
-  LegacyCRM → LLM directly
-  Others    → Regex → BERT (batch) → LLM fallback
-
-Changes in V9:
-  - Fixed CPU Starvation: Limited max_workers to half the CPU cores to prevent Gradio WebSocket timeouts.
-  - Reduced IPC Overhead: Lowered chunk_size to 10,000 to prevent CPU lockups during cross-process data pickling.
-  - Restored Multi-processing: Outer chunks use ProcessPoolExecutor for speed, inner LLM calls use ThreadPoolExecutor.
-"""
 from __future__ import annotations
 import os
 import time
@@ -21,11 +10,10 @@ from processor_regex import classify_with_regex
 from processor_bert  import classify_batch as bert_batch
 from processor_llm   import classify_with_llm
 
-# ── Config ──────────────────────────────────────────────────────────────────
+
 LEGACY_SOURCE = os.getenv("LEGACY_SOURCE", "LegacyCRM")
 
 
-# ── Result type ─────────────────────────────────────────────────────────────
 def _make_result(label: str, tier: str, confidence, latency_ms: float) -> dict:
     return {
         "label":      label,
@@ -35,25 +23,21 @@ def _make_result(label: str, tier: str, confidence, latency_ms: float) -> dict:
     }
 
 
-# ── Caching Layer (Sharded per Worker) ──────────────────────────────────────
 @lru_cache(maxsize=500000) 
 def cached_llm_call(log_msg: str) -> str:
     """Executes the expensive LLM call only if the string misses the cache."""
     return classify_with_llm(log_msg)
 
 
-# ── Single log (backward-compatible) ────────────────────────────────────────
 def classify_log(source: str, log_msg: str) -> dict:
     results = classify_logs([(source, log_msg)])
     return results[0]
 
 
-# ── Batch pipeline (main entry point) ───────────────────────────────────────
 def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
     n       = len(logs)
     results = [None] * n
 
-    # ── Step 1: Route to groups ─────────────────────────────────────────────
     llm_indices   = []
     bert_indices  = []
 
@@ -70,7 +54,6 @@ def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
             else:
                 bert_indices.append(i)
 
-    # ── Step 2: BERT batch (CPU Bound) ──────────────────────────────────────
     if bert_indices:
         bert_msgs = [logs[i][1] for i in bert_indices]
 
@@ -86,7 +69,6 @@ def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
             else:
                 llm_indices.append(idx)
 
-    # ── Step 3: LLM (I/O Bound - Threading Applied Here) ────────────────────
     if llm_indices:
         def parallel_llm(idx):
             src, msg = logs[idx]
@@ -109,7 +91,6 @@ def classify_logs(logs: list[tuple[str, str]]) -> list[dict]:
     return results
 
 
-# ── Pipeline summary ─────────────────────────────────────────────────────────
 def pipeline_summary(results: list[dict]) -> dict:
     tier_groups: dict[str, list[float]] = {}
     label_counts: dict[str, int] = {}
@@ -141,13 +122,11 @@ def pipeline_summary(results: list[dict]) -> dict:
     }
 
 
-# ── Multiprocessing Helper ───────────────────────────────────────────────────
 def _process_chunk(chunk: list[tuple[str, str]]) -> list[dict]:
     """Top-level helper function required for ProcessPoolExecutor mapping."""
     return classify_logs(chunk)
 
 
-# ── CSV batch classify (Balanced Processing) ─────────────────────────────────
 def classify_csv(input_path: str, output_path: str = "output.csv") -> tuple[str, pd.DataFrame]:
     """
     Balanced Batch Processing to prevent CPU Starvation UI crashes.
@@ -160,12 +139,8 @@ def classify_csv(input_path: str, output_path: str = "output.csv") -> tuple[str,
     log_pairs = list(zip(df["source"], df["log_message"]))
     total_logs = len(log_pairs)
     
-    # FIX: Use exactly half of the available CPU cores (minimum 1). 
-    # This leaves the other half for Gradio websockets and the OS.
     safe_cores = max(1, os.cpu_count() // 2)
     
-    # FIX: Reduce chunk size to 10,000. 
-    # Massive chunks cause CPU lockups during inter-process data pickling.
     chunk_size = 10000 
     chunks = [log_pairs[i:i + chunk_size] for i in range(0, total_logs, chunk_size)]
     
