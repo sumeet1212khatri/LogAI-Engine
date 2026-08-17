@@ -1,7 +1,4 @@
-"""
-Log Classification System — HuggingFace Spaces
-Ultra-Modern 3D UI | Optimized for Gradio 6.0 & HF Free Tier
-"""
+
 from __future__ import annotations
 import io
 import time
@@ -12,7 +9,6 @@ import gradio as gr
 from classify import classify_log, classify_csv
 from processor_bert import preload_models
 
-# ── Preload models (Start loading BERT into RAM immediately) ──
 preload_models()
 
 SOURCES = [
@@ -36,7 +32,7 @@ EXAMPLE_LOGS = [
     ["LegacyCRM",       "The 'BulkEmailSender' feature will be deprecated in v5.0."],
 ]
 
-# ── Custom CSS ────────────────────────
+
 CUSTOM_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=Share+Tech+Mono&family=Exo+2:wght@400;600&display=swap');
 
@@ -80,7 +76,6 @@ button.primary:hover {
 }
 """
 
-# ── Functions ────────────────────────────────────────────────
 
 def classify_single(source: str, log_message: str):
     from processor_bert import _model_ready
@@ -110,7 +105,7 @@ def classify_batch(file, progress=gr.Progress(track_tqdm=True)):
     t0 = time.perf_counter()
     
     try:
-        # FIX: Generate a unique output path per user to prevent data bleeding
+       
         unique_id = uuid.uuid4().hex
         safe_output_path = f"/tmp/classified_output_{unique_id}.csv"
         
@@ -157,7 +152,7 @@ def classify_batch(file, progress=gr.Progress(track_tqdm=True)):
     except Exception as e:
         return None, f"❌ System Error: {str(e)}"
 
-# ── Theme & Layout ──────────────────────────────────────────
+
 THEME = gr.themes.Base(
     primary_hue="blue",
     secondary_hue="cyan",
